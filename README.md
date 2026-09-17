@@ -4,21 +4,18 @@ Geocoding API over OpenStreetMap: forward (place name → coordinates) and rever
 
 TODO: curl examples 
 
-
 ## Setup
 
-TODO 
+Requires `osmium-tool` and `wget`. (TODO -> uv)
+
+```bash
+make get-data    # download Ireland + Switzerland extracts from Geofabrik, plus create Galway/Zurich subsets subsets, and create a IE/CH merged data
+```
 
 ## Architecture
 
-TODO
-
-
 ## Tech stack and rationale
 
-TODO
+## TODO for README
 
-## Known limitations and future improvements
-
-TODO 
-
+* TODO Ireland/CH choice
