@@ -11,9 +11,15 @@ mkdir -p data/{raw,subsets,merged}
 
 echo "== download";  wget -P data/raw "$GEOFABRIK/$IE" "$GEOFABRIK/$CH"
 
-echo "== subsets"
-osmium extract -b -9.12,53.24,-8.95,53.31 "data/raw/$IE" -o data/subsets/galway.osm.pbf
-osmium extract -b 8.45,47.32,8.63,47.43     "data/raw/$CH" -o data/subsets/zurich.osm.pbf
+echo "== admin boundaries, pulled whole (a bbox cut clips the country outline)"
+osmium tags-filter "data/raw/$IE" r/boundary=administrative -o data/subsets/ie-boundaries.osm.pbf
+osmium tags-filter "data/raw/$CH" r/boundary=administrative -o data/subsets/ch-boundaries.osm.pbf
+
+echo "== subsets (city bbox + that country's boundaries)"
+osmium extract -b -9.12,53.24,-8.95,53.31 "data/raw/$IE" -o data/subsets/galway-bbox.osm.pbf
+osmium merge data/subsets/galway-bbox.osm.pbf data/subsets/ie-boundaries.osm.pbf -o data/subsets/galway.osm.pbf
+osmium extract -b 8.45,47.32,8.63,47.43 "data/raw/$CH" -o data/subsets/zurich-bbox.osm.pbf
+osmium merge data/subsets/zurich-bbox.osm.pbf data/subsets/ch-boundaries.osm.pbf -o data/subsets/zurich.osm.pbf
 
 echo "== merge Ireland and Switzerland";  osmium merge "data/raw/$IE" "data/raw/$CH" -o data/merged/ie-ch.osm.pbf
 echo "== done";   ls -lh data/raw data/subsets data/merged
