@@ -9,7 +9,7 @@ TODO: curl examples
 
 ## Setup
 
-Requires `uv`, `osmium-tool` and `wget`. (TODO: docker, node)
+Requires `uv`, `osmium-tool`, `wget` and `docker`. (TODO: node)
 
 ```bash
 uv sync
