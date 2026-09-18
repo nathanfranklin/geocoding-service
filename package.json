@@ -5,9 +5,9 @@
   "type": "module",
   "description": "Single-endpoint forward + reverse geocoding API over OpenStreetMap",
   "scripts": {
-    "dev": "tsx --env-file=dev.env watch src/server.ts",
+    "dev": "tsx watch --env-file=dev.env src/server.ts",
     "build": "tsc",
-    "start": "node --env-file=dev.env  dist/server.js",
+    "start": "node --env-file=dev.env dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

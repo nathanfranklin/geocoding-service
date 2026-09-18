@@ -10,7 +10,7 @@ Responses are a GeoJSON `FeatureCollection`; each feature carries its admin `con
 
 ## Setup
 
-Prerequisites: `uv`, `osmium-tool`, `wget`, Docker (OrbStack or Docker Desktop), Node 22.
+Prerequisites: `uv`, `osmium-tool`, `wget`, Docker (OrbStack or Docker Desktop), Node 26.
 
 ### Install
 ```bash
