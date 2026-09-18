@@ -135,14 +135,16 @@ class Places(osmium.SimpleHandler):
         )
 
 
-def main(path):
+def main(path, out=sys.stdout):
+    # TODO: separate row generation from TSV writing so tests can inspect dicts instead of parsing CSV
+
     # Pass 1: read the file, keep admin boundaries, index them
     admin_boundaries = AdminBoundaries()
     admin_boundaries.apply_file(path, locations=True)
     admin_boundaries.build_index()
     print(f"pass 1: {len(admin_boundaries.polygons)} admin boundaries", file=sys.stderr)
 
-    tsv = csv.writer(sys.stdout, delimiter="\t", lineterminator="\n")
+    tsv = csv.writer(out, delimiter="\t", lineterminator="\n")
     tsv.writerow(
         [
             "osm_type",

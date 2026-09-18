@@ -3,11 +3,19 @@ name: ci
 on: [push, pull_request]
 
 jobs:
-  python:
+  lint-python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
       - run: uv sync --group dev
-      - run: uv run black --check pipeline
-      - run: uv run flake8 pipeline
+      - run: uv run black --check pipeline test
+      - run: uv run flake8 pipeline test
+
+  test-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --group dev
+      - run: uv run pytest --cov=pipeline --cov-report=term-missing

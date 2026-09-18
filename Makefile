@@ -1,4 +1,4 @@
-.PHONY: get-data clean-data
+.PHONY: get-data clean-data build-galway build-zurich build-ireland build-switzerland build test lint format
 
 get-data:
 	pipeline/get_data.sh
@@ -20,3 +20,12 @@ build-switzerland:
 
 build:
 	uv run pipeline/build.py data/merged/ie-ch.osm.pbf > data/places.tsv
+
+test:
+	uv run pytest
+
+lint:
+	uv run black --check pipeline test && uv run flake8 pipeline test
+
+format:
+	uv run black pipeline test
