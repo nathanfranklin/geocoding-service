@@ -228,6 +228,8 @@ def main(path, out=sys.stdout):
 
     # Pass 1: read the file, keep admin boundaries, index them
     admin_boundaries = AdminBoundaries()
+    # locations=True collects all node coordinates in memory so need to consider scalability (there is a
+    # disk-backed approach that is offered by osmium )
     admin_boundaries.apply_file(path, locations=True)
     admin_boundaries.build_index()
     print(f"pass 1: {len(admin_boundaries.polygons)} admin boundaries", file=sys.stderr)
@@ -280,6 +282,7 @@ def main(path, out=sys.stdout):
 
     # Pass 2: read again, one row per named place / poi node or area.
     # TODO: use osmium.FileProcessor instead of SimpleHandler so the library can prefilter nodes
+    # (note note at locations=True at start of main and scalability issue)
     RowWriter(admin_boundaries, tsv).apply_file(path, locations=True)
 
 
