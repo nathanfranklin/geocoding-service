@@ -37,6 +37,7 @@ Then you can use API:
 curl 'http://localhost:3000/geocode?q=galway'                        # forward for Galway
 curl 'http://localhost:3000/geocode?q=-9.049,53.274'                 # reverse for a point near Eyre Square
 curl 'http://localhost:3000/geocode?q=galway&types=place&limit=5'    # forward for Galway, settlements only, top 5
+curl 'http://localhost:3000/geocode?q=galway&types=poi'             # forward for Galway, POIs only
 ```
 
 
@@ -53,10 +54,11 @@ A request is then an SQL lookup and creation of the GeoJSON FeatureCollection (t
 shape out of the query).
  
 - **Single endpoint.** `q` as `lon,lat` is reverse, otherwise it is forward.
-  - **`types`** filters layers, comma-separated (`admin`, `place`)
+  - **`types`** filters layers, comma-separated (`admin`, `place`, `poi`)
   - **`limit`** caps forward results.
   - **`mode=forward|reverse`** forces the direction when the input is ambiguous.
-- **Layers so far:** `admin` (boundary polygons) and `place` (city/town/village nodes). TODO: `poi`, `street`.
+- **Layers so far:** `admin` (boundary polygons), `place` (city/town/village nodes),
+  and `poi` (amenities, shops, stations, …). TODO: `street`, `address`.
 - **Forward** ranks on name-match strength times importance, with admin boundaries down-weighted so
   `galway` returns the city above its council area.
 - **Reverse** runs one query per layer: `ST_Contains` for admin polygons, nearest-point for the rest.
@@ -71,11 +73,12 @@ shape out of the query).
 
 ## Known limitations, future improvements and scaling
 
-* Support POI/street/address layers
+* Support street/address layers
 * Improve the importance function: currently rank-only; add population, Wikipedia/Wikidata link counts, click feedback
+* Per-class POI ranks: every POI is rank 30 at the moment
 * Improve the pg_trgm similarity threshold; fuzzy matching picks up too much (e.g. Gals, CH for "galway").
 * Better ranking: term-based relevance in Postgres (pg_search/BM25), or a separate search engine (Elasticsearch, etc.)
-* Scaling: need benchmarks, move to FileProcessor or explore non-python osmium 
+* Scaling: need benchmarks, move to FileProcessor or explore non-python osmium
 * API integration test with a Postgres service container in CI.
 
 ## License

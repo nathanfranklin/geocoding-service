@@ -4,16 +4,17 @@ Each row gets its context: the admin boundaries containing it (Galway → County
 That needs the boundaries first, so the file is read twice:
 
   pass 1  admin boundaries -> polygons in an STRtree (log-time containment lookups)
-  pass 2  place=* nodes    -> one TSV row each, with context from pass 1
+  pass 2  place / POI nodes and areas -> one TSV row each, with context from pass 1
 
 Both are pyosmium SimpleHandlers: apply_file() streams the PBF and calls node()/area() per object.
 See later TODO about FileProcessor.
 
-Layers written: admin, place.  TODO: poi, street.
+Layers written: admin, place, poi.  TODO: street/address.
 """
 
 import csv
 import sys
+from typing import NamedTuple
 
 import osmium
 from osmium import geom as og
@@ -30,13 +31,38 @@ PLACE_RANK = {
     "locality": 22,
 }
 
+# a 30 rank for every POI
+POI_RANK = 30
+
+# All OSM primary keys that denote a POI. Source: https://wiki.openstreetmap.org/wiki/Map_features
+# Except these:  highway, waterway, building, place, boundary (place/boundary are in place/admin layers)
+POI_KEYS = (
+    "amenity",
+    "shop",
+    "tourism",
+    "leisure",
+    "historic",
+    "railway",
+    "public_transport",
+    "aeroway",
+    "aerialway",
+    "office",
+    "craft",
+    "healthcare",
+    "emergency",
+    "man_made",
+    "natural",
+    "sport",
+    "military",
+)
+
 wkb_factory = og.WKBFactory()  # converts osmium areas to WKB, which shapely can load
 
 
-def importance(place_rank):
+def importance(place_rank: int) -> float:
     """0–1 score for ranking results; purely from rank for now.
 
-    TODO: population tag, Wikipedia link counts, click feedback.
+    TODO: population tag, Wikipedia link counts, click feedback; per-class POI ranks (all fixed to 30 now).
     """
     return max(0.05, 0.75 - place_rank / 40.0)
 
@@ -44,6 +70,11 @@ def importance(place_rank):
 def alt_names(tags, name):
     """Get other-language names (name:* tags), minus the display name."""
     return sorted({v for k, v in tags if k.startswith("name:") and v != name})
+
+
+def get_poi_key(tags) -> str | None:
+    """The first POI tag present (amenity/shop/…), or None."""
+    return next((k for k in POI_KEYS if k in tags), None)
 
 
 class AdminBoundaries(osmium.SimpleHandler):
@@ -94,15 +125,52 @@ class AdminBoundaries(osmium.SimpleHandler):
         return sorted((self.meta[i] for i in hits), key=lambda m: m["admin_level"], reverse=True)
 
 
-def context_of(boundaries):
+def context_of(boundaries) -> tuple[list[str], str | None]:
     """Build a place's context from the boundaries around it: their names, plus the country's two-letter code."""
     ctx = [b["name"] for b in boundaries]
     cc = next((b["country_code"] for b in boundaries if b["admin_level"] == 2), None)
     return ctx, cc
 
 
-class Places(osmium.SimpleHandler):
-    """One TSV row per named place=* node."""
+class Kind(NamedTuple):
+    """How a feature is classified into a row.
+
+    layer      place | poi | admin
+    osm_class  OSM key, becomes the `class` column: place, amenity, shop, boundary
+    type       OSM value, becomes the `type` column: city, pub, convenience
+    rank
+
+    examples:
+         Galway     -->  Kind("place", "place",   "city",        16)
+         Brusna Inn --> Kind("poi",   "amenity", "pub",         30)
+    """
+
+    layer: str
+    osm_class: str
+    type: str
+    rank: int
+
+
+def classify(tags) -> Kind | None:
+    """The Kind for a tag set, or None to skip it.
+
+    A place=* tag takes priority over a POI tag.
+    """
+    place = tags.get("place")
+    if place in PLACE_RANK:
+        return Kind("place", "place", place, PLACE_RANK[place])
+    key = get_poi_key(tags)
+    if key:
+        return Kind("poi", key, tags[key], POI_RANK)
+    return None
+
+
+class RowWriter(osmium.SimpleHandler):
+    """Pass 2: one TSV row per named place or POI, mapped as a node or an area.
+
+    node() handles points; area() handles the same tags on a polygon (a POI building, a park,
+    a city drawn as an area), reduced to a point.
+    """
 
     def __init__(self, boundaries, tsv):
         super().__init__()
@@ -110,18 +178,38 @@ class Places(osmium.SimpleHandler):
 
     def node(self, n):
         t = n.tags
-        if "name" not in t or t.get("place") not in PLACE_RANK:
+        if "name" not in t:
             return
-        pt = Point(n.location.lon, n.location.lat)
-        rank = PLACE_RANK[t["place"]]
+        kind = classify(t)
+        if kind is not None:
+            self._write_row(Point(n.location.lon, n.location.lat), "N", n.id, t, kind)
+
+    def area(self, a):
+        t = a.tags
+        if "name" not in t or t.get("boundary") == "administrative":
+            # skip the unnamed
+            # and also skip admin boundaries are handled separately (after pass 1)
+            return
+        kind = classify(t)
+        if kind is None:  # skip polygon assembly for features we would not keep
+            return
+        try:
+            pt = wkb.loads(wkb_factory.create_multipolygon(a), hex=True).representative_point()
+        except RuntimeError:
+            return
+        self._write_row(pt, "W" if a.from_way() else "R", a.orig_id(), t, kind)
+
+    def _write_row(self, pt, osm_type: str, osm_id: int, t, kind: Kind):
+        """Write one row; kind is the Kind from classify()."""
+        layer, osm_class, typ, rank = kind
         ctx, cc = context_of(self.boundaries.containing(pt))
         self.tsv.writerow(
             [
-                "N",
-                n.id,
-                "place",
-                "place",
-                t["place"],
+                osm_type,
+                osm_id,
+                layer,
+                osm_class,
+                typ,
                 t["name"],
                 "|".join(alt_names(t, t["name"])),
                 f"{pt.x:.6f}",
@@ -190,9 +278,9 @@ def main(path, out=sys.stdout):
             ]
         )
 
-    # Pass 2: read again, one row per place node. (locations=True only needed once area()/way() are added)
+    # Pass 2: read again, one row per named place / poi node or area.
     # TODO: use osmium.FileProcessor instead of SimpleHandler so the library can prefilter nodes
-    Places(admin_boundaries, tsv).apply_file(path, locations=True)
+    RowWriter(admin_boundaries, tsv).apply_file(path, locations=True)
 
 
 if __name__ == "__main__":
