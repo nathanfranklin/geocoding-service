@@ -1,31 +1,19 @@
-import csv
-import io
-import sys
 from pathlib import Path
 
 import pytest
 
-from pipeline import build
+from _util import build_rows, by_name, pois
 
-ROOT = Path(__file__).resolve().parents[2]
-FIXTURE = ROOT / "test/fixtures/galway-center.osm.pbf"
-
-csv.field_size_limit(sys.maxsize)
+FIXTURE = Path(__file__).resolve().parents[2] / "test" / "fixtures" / "galway-center.osm.pbf"
 
 
 @pytest.fixture(scope="module")
 def rows():
-    buf = io.StringIO()
-    build.main(str(FIXTURE), out=buf)
-    return list(csv.DictReader(io.StringIO(buf.getvalue()), delimiter="\t"))
-
-
-def by_name(rows, layer, name):
-    return next(r for r in rows if r["layer"] == layer and r["name"] == name)
+    return build_rows(FIXTURE)
 
 
 def test_layers_present(rows):
-    assert {r["layer"] for r in rows} == {"admin", "place"}
+    assert {r["layer"] for r in rows} == {"admin", "place", "poi"}
 
 
 def test_galway_city(rows):
@@ -51,3 +39,17 @@ def test_admin_row_has_polygon_and_parents(rows):
 
 def test_irish_alt_name_kept(rows):
     assert "Gaillimh" in by_name(rows, "place", "Galway")["alt_names"].split("|")
+
+
+def test_spanish_arch_monument_is_poi(rows):
+    # the monument is mapped as a polygon, so it comes through the area() path (osm_type W), not a node
+    monument = next(r for r in pois(rows, "Spanish Arch") if r["class"] == "tourism")
+    assert monument["osm_type"] == "W"
+    assert monument["type"] == "attraction"
+
+
+def test_same_name_different_objects(rows):
+    # OSM has a monument AND a bus stop both named "Spanish Arch"
+    classes = {r["class"] for r in pois(rows, "Spanish Arch")}
+    assert "tourism" in classes
+    assert "public_transport" in classes
