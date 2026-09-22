@@ -1,20 +1,11 @@
 """Shared helpers for the pipeline tests: build a fixture into rows, then look them up."""
 
-import csv
-import io
-import sys
-
 from pipeline import build
-
-# Admin rows carry full polygon WKT; Ireland's coastline is multi-MB, past csv's default field cap.
-csv.field_size_limit(sys.maxsize)
 
 
 def build_rows(fixture_path):
-    """Run the pipeline on a fixture PBF and return the TSV as a list of dict rows."""
-    buf = io.StringIO()
-    build.main(str(fixture_path), out=buf)
-    return list(csv.DictReader(io.StringIO(buf.getvalue()), delimiter="\t"))
+    """Run the pipeline on a fixture PBF and return its rows as dicts (native values)."""
+    return list(build.rows(str(fixture_path)))
 
 
 def by_name(rows, layer, name):
