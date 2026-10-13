@@ -19,4 +19,4 @@ def test_zurich_city(rows):
 
 
 def test_zurich_context_reaches_country(rows):
-    assert by_name(rows, "place", "Zürich")["context"].split("|")[-1] == "Switzerland"
+    assert by_name(rows, "place", "Zürich")["context"][-1] == "Switzerland"

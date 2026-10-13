@@ -18,6 +18,7 @@ from typing import NamedTuple
 
 import osmium
 from osmium import geom as og
+from osmium.filter import KeyFilter
 from shapely import STRtree, Point, wkb
 
 # Nominatim's ranking convention: https://nominatim.org/release-docs/latest/customize/Ranking/
@@ -165,75 +166,118 @@ def classify(tags) -> Kind | None:
     return None
 
 
-class RowWriter(osmium.SimpleHandler):
-    """Pass 2: one TSV row per named place or POI, mapped as a node or an area.
+def _row(pt, osm_type, osm_id, layer, osm_class, typ, rank, name, alts, ctx, cc, wkt):
+    """One row as a dict of native values (lists stay lists, numbers stay numbers). write_tsv() formats them."""
+    return {
+        "osm_type": osm_type,
+        "osm_id": osm_id,
+        "layer": layer,
+        "class": osm_class,
+        "type": typ,
+        "name": name,
+        "alt_names": alts,
+        "lon": pt.x,
+        "lat": pt.y,
+        "place_rank": rank,
+        "importance": importance(rank),
+        "context": ctx,
+        "country_code": cc,
+        "full_geom_wkt": wkt,
+    }
 
-    node() handles points; area() handles the same tags on a polygon (a POI building, a park,
-    a city drawn as an area), reduced to a point.
-    """
 
-    def __init__(self, boundaries, tsv):
-        super().__init__()
-        self.boundaries, self.tsv = boundaries, tsv
+def load_boundaries(path) -> AdminBoundaries:
+    """Pass 1: read the file, keep admin boundaries, index them."""
+    boundaries = AdminBoundaries()
+    # locations=True keeps an in-memory id->(lon,lat) cache for every node in the file, so area
+    # geometries can be assembled. On a full country this cache, not the row data, is the dominant
+    # memory cost.
+    # SCALABILITY (later, not now): move it to a disk-backed index, e.g.
+    #   boundaries.apply_file(path, locations=True, idx="sparse_file_array,nodes.cache")
+    # or reuse one serialized boundary set across sharded per-tile runs. Fine in RAM at IE/CH scale.
+    boundaries.apply_file(path, locations=True)
+    boundaries.build_index()
+    print(f"pass 1: {len(boundaries.polygons)} admin boundaries", file=sys.stderr)
+    return boundaries
 
-    def node(self, n):
-        t = n.tags
-        if "name" not in t:
-            return
-        kind = classify(t)
-        if kind is not None:
-            self._write_row(Point(n.location.lon, n.location.lat), "N", n.id, t, kind)
 
-    def area(self, a):
-        t = a.tags
-        if "name" not in t or t.get("boundary") == "administrative":
-            # skip the unnamed
-            # and also skip admin boundaries are handled separately (after pass 1)
-            return
-        kind = classify(t)
-        if kind is None:  # skip polygon assembly for features we would not keep
-            return
+def _place_or_poi_row(obj, boundaries) -> dict | None:
+    """Row for a named place/POI node or area, or None to skip it. name is guaranteed by the KeyFilter."""
+    t = obj.tags
+    kind = classify(t)
+    if kind is None:
+        return None
+    if isinstance(obj, osmium.osm.Node):
+        pt = Point(obj.location.lon, obj.location.lat)
+        osm_type, osm_id = "N", obj.id
+    else:  # Area (closed way or multipolygon relation)
+        if t.get("boundary") == "administrative":
+            return None  # admin boundaries are emitted from pass 1, not here
         try:
-            pt = wkb.loads(wkb_factory.create_multipolygon(a), hex=True).representative_point()
+            pt = wkb.loads(wkb_factory.create_multipolygon(obj), hex=True).representative_point()
         except RuntimeError:
-            return
-        self._write_row(pt, "W" if a.from_way() else "R", a.orig_id(), t, kind)
+            return None
+        osm_type, osm_id = ("W" if obj.from_way() else "R"), obj.orig_id()
+    ctx, cc = context_of(boundaries.containing(pt))
+    return _row(
+        pt,
+        osm_type,
+        osm_id,
+        kind.layer,
+        kind.osm_class,
+        kind.type,
+        kind.rank,
+        t["name"],
+        alt_names(t, t["name"]),
+        ctx,
+        cc,
+        None,
+    )
 
-    def _write_row(self, pt, osm_type: str, osm_id: int, t, kind: Kind):
-        """Write one row; kind is the Kind from classify()."""
-        layer, osm_class, typ, rank = kind
-        ctx, cc = context_of(self.boundaries.containing(pt))
-        self.tsv.writerow(
-            [
-                osm_type,
-                osm_id,
-                layer,
-                osm_class,
-                typ,
-                t["name"],
-                "|".join(alt_names(t, t["name"])),
-                f"{pt.x:.6f}",
-                f"{pt.y:.6f}",
-                rank,
-                f"{importance(rank):.3f}",
-                "|".join(ctx),
-                cc or "",
-                "",
-            ]
+
+def admin_rows(boundaries):
+    """One row per admin boundary, with the boundaries above it as context."""
+    for polygon, meta in zip(boundaries.polygons, boundaries.meta):
+        # TODO: use admin_centre/label member node instead of representative_point()
+        pt = polygon.representative_point()
+        parents = [b for b in boundaries.containing(pt) if b["admin_level"] < meta["admin_level"]]
+        ctx, cc = context_of(parents)
+        rank = 2 * meta["admin_level"]
+        yield _row(
+            pt,
+            meta["osm_type"],
+            meta["osm_id"],
+            "admin",
+            "boundary",
+            "administrative",
+            rank,
+            meta["name"],
+            meta["alt_names"],
+            ctx,
+            meta["country_code"] or cc,
+            polygon.wkt,
         )
 
 
-def main(path, out=sys.stdout):
-    # TODO: separate row generation from TSV writing so tests can inspect dicts instead of parsing CSV
+def rows(path):
+    """Yield every row for a PBF: admin boundaries first, then places and POIs. Native values; write_tsv() formats."""
+    boundaries = load_boundaries(path)
+    yield from admin_rows(boundaries)
 
-    # Pass 1: read the file, keep admin boundaries, index them
-    admin_boundaries = AdminBoundaries()
-    # locations=True collects all node coordinates in memory so need to consider scalability (there is a
-    # disk-backed approach that is offered by osmium )
-    admin_boundaries.apply_file(path, locations=True)
-    admin_boundaries.build_index()
-    print(f"pass 1: {len(admin_boundaries.polygons)} admin boundaries", file=sys.stderr)
+    # Pass 2: stream places / POIs.
+    # with_areas() assembles closed ways and multipolygon relations into Area objects
+    # with_filter(KeyFilter("name")) drops unnamed objects.
+    # A named closed way arrives as both a Way and an Area; we take the Area.
+    pass2 = osmium.FileProcessor(path).with_areas().with_filter(KeyFilter("name"))
+    for obj in pass2:
+        if isinstance(obj, (osmium.osm.Node, osmium.osm.Area)):
+            row = _place_or_poi_row(obj, boundaries)
+            if row is not None:
+                yield row
 
+
+def write_tsv(rows, out=sys.stdout):
+    """Write rows to TSV. This is the one place values get formatted (lists joined with |, None as empty)."""
     tsv = csv.writer(out, delimiter="\t", lineterminator="\n")
     tsv.writerow(
         [
@@ -253,38 +297,30 @@ def main(path, out=sys.stdout):
             "full_geom_wkt",
         ]
     )
-
-    # Write a row for each admin boundary, with all the boundaries above it as context.
-    for polygon, meta in zip(admin_boundaries.polygons, admin_boundaries.meta):
-        # TODO: use admin_centre/label member node instead of representative_point()
-        pt = polygon.representative_point()
-        parents = [b for b in admin_boundaries.containing(pt) if b["admin_level"] < meta["admin_level"]]
-        ctx, cc = context_of(parents)
-        rank = 2 * meta["admin_level"]
+    for r in rows:
         tsv.writerow(
             [
-                meta["osm_type"],
-                meta["osm_id"],
-                "admin",
-                "boundary",
-                "administrative",
-                meta["name"],
-                "|".join(meta["alt_names"]),
-                f"{pt.x:.6f}",
-                f"{pt.y:.6f}",
-                rank,
-                f"{importance(rank):.3f}",
-                "|".join(ctx),
-                meta["country_code"] or cc or "",
-                polygon.wkt,
+                r["osm_type"],
+                r["osm_id"],
+                r["layer"],
+                r["class"],
+                r["type"],
+                r["name"],
+                "|".join(r["alt_names"]),
+                f"{r['lon']:.6f}",
+                f"{r['lat']:.6f}",
+                r["place_rank"],
+                f"{r['importance']:.3f}",
+                "|".join(r["context"]),
+                r["country_code"] or "",
+                r["full_geom_wkt"] or "",
             ]
         )
 
-    # Pass 2: read again, one row per named place / poi node or area.
-    # TODO: use osmium.FileProcessor instead of SimpleHandler so the library can prefilter nodes
-    # (note note at locations=True at start of main and scalability issue)
-    RowWriter(admin_boundaries, tsv).apply_file(path, locations=True)
+
+def main(path, out=sys.stdout):
+    write_tsv(rows(path), out)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main(sys.argv[1])
